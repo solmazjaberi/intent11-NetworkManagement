@@ -1,0 +1,159 @@
+AS AutonomicNetwork {
+	ASSELF_MANAGEMENT {
+    SELF_CONFIGURING{
+      FLUENT inManaging{INITIATED_BY{EVENTS.TimeToManage} TERMINATED_BY{EVENTS.Managingdone}}
+      MAPPING{CONDITIONS{inManaging} DO_ACTIONS{ACTIONS.Manage}}
+        }//SELF_CONFIGURING
+      }//ASSELF_MANAGEMENT
+
+    ACTIONS{
+      ACTION Manage{
+        GUARDS{ASSELF_MANAGEMENT.SELF_CONFIGURING.inManaging}
+        DOES{CALL ASIP.FUNCTIONS.sendStartLifeCycleMsg;
+             CALL ASIP.FUNCTIONS.receiveStartLifeCycleMsg}
+        TRIGGERS{EVENTS.Managingdone}
+      }
+    }
+
+    EVENTS{
+      EVENT TimeToManage{ACTIVATION{PERIOD{1 MIN}}}
+      EVENT Managingdone{}
+    }
+}//AutonomicNetwork
+
+ASIP{
+  MESSAGES{
+      MESSAGE msgStartLifeCycle{
+        SENDER { ANY }
+  			RECEIVER { ANY }
+  			PRIORITY { 1 }
+  			MSG_TYPE {	TEXT }
+  			BODY { "Start LIFECYCLE of the VMs " }}
+        }
+  CHANNELS {
+    CHANNEL Public_Link {
+      ACCEPTS { ASIP.MESSAGES.msgStartLifeCycle}
+      ACCESS { SEQUENTIAL }
+      DIRECTION { INOUT } }
+  }
+  FUNCTIONS {
+    FUNCTION sendStartLifeCycleMsg {
+      DOES { ASIP.MESSAGES.msgStartLifeCycle >> ASIP.CHANNELS.Public_Link }
+    }
+    FUNCTION receiveStartLifeCycleMsg {
+      DOES { ASIP.MESSAGES.msgStartLifeCycle << ASIP.CHANNELS.Public_Link }
+    }
+
+  }
+}//ASIP
+
+
+AES{
+  AE Controller{
+    AESELF_MANAGEMENT {
+      SELF_CONFIGURING{
+            FLUENT InProvisioning{INITIATED_BY{EVENTS.TimeToStartLifeCycle} TERMINATED_BY{EVENTS.ProvisioningDone}}
+            FLUENT InStaging{INITIATED_BY{EVENTS.ProvisioningDone} TERMINATED_BY{EVENTS.StagingDone}}
+            FLUENT InRunning{INITIATED_BY{EVENTS.StagingDone} TERMINATED_BY{EVENTS.RunningDone}}
+            MAPPING{CONDITIONS{InProvisioning} DO_ACTIONS{ACTIONS.AllocateResources}}
+            MAPPING{CONDITIONS{InStaging} DO_ACTIONS{ACTIONS.StartBooting}}
+            MAPPING{CONDITIONS{InRunning} DO_ACTIONS{ACTIONS.RunInstances}}
+      }//SELF_CONFIGURING
+
+      SELF_HEALING{
+            FLUENT InRepairing{INITIATED_BY{EVENTS.RunningStates} TERMINATED_BY{EVENTS.RepairingDone}}
+            MAPPING{CONDITIONS{InRepairing} DO_ACTIONS{ACTIONS.Repair}}
+        }//SELF_HEALING
+
+      OTHER_POLICIES {
+			   POLICY SELF_SECHEDULING{
+            FLUENT inLifeCycle{INITIATED_BY{EVENTS.TimeToRecordLifeCycle} TERMINATED_BY{EVENTS.LifeCycleRecorded}}
+            MAPPING{CONDITIONS{inLifeCycle} DO_ACTIONS{ACTIONS.RecordLifeCycle}}
+          }//SELF_SECHEDULING
+
+        }//OTHER_POLICIES
+       }//AESELF_MANAGEMENT
+
+    AEIP{
+        MESSAGES{
+            MESSAGE msgRun{	SENDER{ AES.Controller } 	RECEIVER{ ANY} 	MSG_TYPE{ TEXT } 	BODY{ "Start the Procedure!" }}
+            MESSAGE msgStop{ SENDER{ AES.Controller } 	RECEIVER{ ANY} 	MSG_TYPE{TASK } 	}
+            MESSAGE msgSuspend{ SENDER{ AES.Controller } 	RECEIVER{ ANY} 	MSG_TYPE{ TASK } }
+            MESSAGE msgTerminate{ SENDER{ AES.Controller } 	RECEIVER{ ANY} 	MSG_TYPE{ TASK }}
+            MESSAGE msgLifeCycle{ SENDER{ AES.Controller } 	RECEIVER{ ANY} 	MSG_TYPE{ TEXT } 	BODY{ " VM LIFECYCLE " }}
+         }//MESSAGES
+
+        CHANNELS{
+          CHANNEL Controller_Link{
+            ACCEPTS{AEIP.MESSAGES.msgRun, AEIP.MESSAGES.msgStop ,AEIP.MESSAGES.msgSuspend ,AEIP.MESSAGES.msgTerminate, AEIP.MESSAGES.msgLifeCycle}
+            ACCESS  { SEQUENTIAL  }
+  					DIRECTION  { INOUT }
+          }
+        }//CHANNELS
+
+        FUNCTIONS{
+          FUNCTION sendRunMsg{DOES{AEIP.MESSAGES.msgRun >> AEIP.CHANNELS.Controller_Link}}
+          FUNCTION sendStopMsg{DOES{AEIP.MESSAGES.msgStop >> AEIP.CHANNELS.Controller_Link}}
+          FUNCTION sendSuspendMsg{DOES{AEIP.MESSAGES.msgSuspend >> AEIP.CHANNELS.Controller_Link}}
+          FUNCTION sendTerminateMsg{DOES{AEIP.MESSAGES.msgTerminate >> AEIP.CHANNELS.Controller_Link}}
+          FUNCTION sendLifCycleMsg{DOES{AEIP.MESSAGES.msgLifeCycle >> AEIP.CHANNELS.Controller_Link}}
+
+        }//FUNCTIONS
+
+        MANAGED_ELEMENTS{}//MANAGED_ELEMENTS
+
+     }//AEIP
+
+     ACTIONS{
+        ACTION AllocateResources{
+        	GUARDS { AESELF_MANAGEMENT.SELF_CONFIGURING.InProvisioning}
+          DOES{CALL IMPL ACTIONS.allocation}
+          TRIGGERS{EVENTS.ProvisioningDone}}
+
+        ACTION IMPL allocation{}
+
+        ACTION StartBooting{
+          GUARDS { AESELF_MANAGEMENT.SELF_CONFIGURING.InStaging}
+          DOES{CALL IMPL ACTIONS.Boot}
+          TRIGGERS{EVENTS.StagingDone}
+        }
+        ACTION IMPL Boot{
+          TRIGGERS{EVENTS.StagingDone}
+        }
+
+        ACTION RunInstances{
+          GUARDS { AESELF_MANAGEMENT.SELF_CONFIGURING.InRunning}
+          DOES{CALL AEIP.FUNCTIONS.sendRunMsg}
+          TRIGGERS{EVENTS.RunningDone, EVENTS.RunningStates}
+      //////    ONERR_TRIGGERS{EVENTS.RunningStates}
+        }
+
+        ACTION Repair{
+          GUARDS { AESELF_MANAGEMENT.SELF_HEALING.InRepairing}
+          DOES{CALL AEIP.FUNCTIONS.sendStopMsg;
+               CALL AEIP.FUNCTIONS.sendSuspendMsg;
+               CALL AEIP.FUNCTIONS.sendTerminateMsg}
+          TRIGGERS{EVENTS.RepairingDone}
+        }
+
+        ACTION RecordLifeCycle{
+          GUARDS { AESELF_MANAGEMENT.OTHER_POLICIES.SELF_SECHEDULING.inLifeCycle}
+          DOES{CALL AEIP.FUNCTIONS.sendLifCycleMsg}
+          TRIGGERS{EVENTS.LifeCycleRecorded}
+        }
+
+     }//ACTIONS
+
+     EVENTS{
+        EVENT TimeToStartLifeCycle{	ACTIVATION  { SENT { ASIP.MESSAGES.msgStartLifeCycle }}}
+        EVENT ProvisioningDone{}
+        EVENT StagingDone{}
+        EVENT RunningDone{}
+        EVENT RunningStates{}
+        EVENT RepairingDone{}
+        EVENT TimeToRecordLifeCycle{ACTIVATION  { OCCURRED { EVENTS.RepairingDone} }}
+        EVENT LifeCycleRecorded{}
+     }//EVENTS
+    }//Controller
+
+}//AES
